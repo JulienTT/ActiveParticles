@@ -217,10 +217,11 @@ void Force_LJ(particle* Particles,struct param Param, double* forces,long** Box,
       }
     }
   }
+  free(Force);
 }
 
 #ifdef PRESSURE
-void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,double _time,long** Box,long* Neighbours,box *** NeighbouringBoxes, FILE* outputparam,double* pressure,double* pressurecount){
+void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,double _time,long** Box,long* Neighbours,box *** NeighbouringBoxes, FILE* outputparam,double* pressure,double* average_density){
 #else
 void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,double _time,long** Box,long* Neighbours,box *** NeighbouringBoxes, FILE* outputparam){
 #endif
@@ -230,31 +231,42 @@ void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,do
   double dx,dy;        // Used to compute displacements
   long i_max;          // index of particle with largest displacement
   
+#ifdef LJ
   /*Compute force for each particle*/
   Force_LJ(Particles,Param,forces,Box,Neighbours,NeighbouringBoxes);
-  
+#endif
+
+#ifdef WCA
+  /*Compute force for each particle*/
+  Force_LJ(Particles,Param,forces,Box,Neighbours,NeighbouringBoxes);
+#endif
+
   /*Largest displacement*/
   dr2_max = 0;
   
   for(i=0;i<Param.N;i++){
     //Compute displacements along x and y
-    dx = ( Param.v0 * cos(Particles[i].theta) + forces[2*i]   ) * Param.dt + Param.sqrt2Dtdt*gasdevMT();
-    dy = ( Param.v0 * sin(Particles[i].theta) + forces[2*i+1] ) * Param.dt + Param.sqrt2Dtdt*gasdevMT();
+    
+    dx = Param.v0 * cos(Particles[i].theta) * Param.dt + Param.sqrt2Dtdt*gasdevMT();
+    dy = Param.v0 * sin(Particles[i].theta) * Param.dt + Param.sqrt2Dtdt*gasdevMT();
 
+#ifdef LJ
+    dx += Param.mu * forces[2*i] * Param.dt;
+    dy += Param.mu * forces[2*i+1] * Param.dt;
+#endif
+    
 #ifdef CLOSEDBC
-    double fwall;
-    double dxw=Particles[i].x-Param.Lx;
-    if(dxw>0){
-      fwall        = -Param.Omega * pow(dxw,Param.nu);
-      dx          += fwall * Param.dt;
-      pressure[1] -= fwall;
-      pressurecount += 1;
+    if(Particles[i].x>Param.x_wall_right){
+      //Absolute value of the force
+      double fwalldt= Param.Omega * pow( Particles[i].x-Param.x_wall_right ,Param.nu-1.) * Param.dt;
+      dx          -= Param.mu * fwalldt;
+      pressure[1] += fwalldt;
     }
-    else if(Particles[i].x<0){
-      fwall        = Param.Omega * pow(-Particles[i].x,Param.nu);
-      dx          += fwall * Param.dt;
-      pressure[0] -= fwall;
-      pressurecount += 1;
+    if(Particles[i].x<Param.x_wall_left){
+      //Absolute value of the force
+      double fwalldt= Param.Omega * pow( Param.x_wall_left-Particles[i].x  ,Param.nu-1.) * Param.dt;
+      dx          += Param.mu * fwalldt;
+      pressure[0] += fwalldt;
     }
 #endif
     
@@ -268,10 +280,11 @@ void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,do
     Particles[i].x     += dx;
     Particles[i].y     += dy;
     Particles[i].theta += Param.sqrt2Drdt*gasdevMT();
+    /*
     if(Particles[i].theta>2*M_PI)
       Particles[i].theta-=2*M_PI;
     if(Particles[i].theta<0)
-      Particles[i].theta+=2*M_PI;
+    Particles[i].theta+=2*M_PI;*/
     
     //Correct displacement for periodic boundary conditions
 #ifdef PBC
@@ -289,24 +302,19 @@ void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,do
 	exit(1);
       }
     }
-    if(Particles[i].y>Param.Ly){
-      Particles[i].y -= Param.Ly;
-      if(Particles[i].y>Param.Ly){
-	printf("y>2Ly\n");
-	exit(1);
-      }
-    }
-    if(Particles[i].y<0){
-      Particles[i].y += Param.Ly;
-      if(Particles[i].y<0){
-	printf("y<-Ly\n");
-	exit(1);
-      }
-    }
-    
 #endif
-
-#ifdef CLOSED
+    //If closed, check you are not too close to the PBC
+#ifdef CLOSEDBC
+    if(Particles[i].x>Param.Lx-Param.sigma){
+      printf("x_wall_right too large\n");
+      exit(1);
+    }
+    if(Particles[i].x<Param.sigma){
+      printf("x_wall_left too small\n");
+      exit(1);
+    }
+#endif
+    //Always use PBC along y
     if(Particles[i].y>Param.Ly){
       Particles[i].y -= Param.Ly;
       if(Particles[i].y>Param.Ly){
@@ -321,6 +329,10 @@ void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,do
 	exit(1);
       }
     }
+
+#ifdef PRESSURE
+    if( Particles[i].x>Param.Lx*2./5. && Particles[i].x<=Param.Lx*3./5. )
+      average_density[0] += Param.dt;
 #endif
     
     //Test if the particle has changed box
@@ -339,7 +351,7 @@ void Move_Particles_ABP(particle* Particles,struct param Param,double* forces,do
     fprintf(outputparam,"at time %lg, dr_max=%lg largest acceptable:%lg\n",_time,sqrt(dr2_max),Param.sigma*0.1);
   }
 }
-
+ 
 double Distance2(particle* Particles,long i,long j,struct param Param){
   double dx=fabs(Particles[i].x-Particles[j].x);
   if(dx>Param.Lx/2.)
@@ -349,7 +361,7 @@ double Distance2(particle* Particles,long i,long j,struct param Param){
     dy=Param.Ly-dy;
   return dx*dx+dy*dy;
 }
-
+ 
 double SmallestDistance(particle* Particles,struct param Param){
   long i,j;
   double rmin2=Param.Lx*Param.Lx;

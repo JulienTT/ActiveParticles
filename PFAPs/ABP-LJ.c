@@ -13,7 +13,7 @@
 */
 
 
-//#define LJ
+#define LJ
 /*
   We use Lennard-Jones interactions for F = -\grad V where
   
@@ -25,7 +25,7 @@
   
 */
 
-#define WCA
+//#define WCA
 /*
   We use WCA potential for F = -\grad V where
   
@@ -37,20 +37,17 @@
   
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
-#include "mt19937-64.c"
-#include <time.h>
+
 
 /*
   Choose the initial condition (IC) between random IC, if RANDOMIC is
-  defined, or read from an input if GIVENIC is defined
+  defined, or read from an input if GIVENIC is defined, or SLABIC to
+  start in a slab configuration
 */
 
-#define RANDOMIC
+//#define RANDOMIC
 //#define GIVENIC
+#define SLABIC
 
 /*
   Choose the boundary conditions between periodic, if PBC is defined,
@@ -62,15 +59,22 @@
   enough to the wall, the program protests.
   
 */
-//#define PBC
-#define CLOSEDBC
+#define PBC
+//#define CLOSEDBC
 
 /*
   Uncomment to compute the pressure exerted on right and left walls
 */
-#define PRESSURE
+//#define PRESSURE
 
 #define EPS 1e-10
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include "mt19937-64.c"
+#include <time.h>
 
 // Structure particles which contains all the data needed to characterize the state of a particle
 typedef struct particle{
@@ -207,6 +211,24 @@ int main(int argc, char* argv[]){
 #ifdef  GIVENIC
   FILE* input;
 #endif
+
+#ifdef SLABIC
+  double rhog; // density of particle in the gas phase
+  double rhol; // density of particle in the liquid phase
+  double liquidfraction; // fraction of system starting in the liquid phase
+  long Ngas;    // Number of particles in the gas
+  long Nliquid; // Number of particles in the liquid
+  double a; //horizontal lattice spacing
+  double h; //heiht between two layers. Equal to a*cos(pi/6)
+  int NxL; //number of rows in the lattice for the liquid phase
+  int NxG; //number of rows in the lattice for the gas phase
+  int Ny;  //number of lines in the lattices
+  long NsitesGas; //Total number of available sites in the gas phase
+  long NsitesLiq; //Total number of available sites in the liquid phase
+  int* GasPhase; //Lattice of gas phase
+  int* LiquidPhase;//Lattice of gas phase
+  long nb; //Number of particles placed so far
+#endif
   
   /* Read parameters of the simulation*/
   
@@ -219,6 +241,11 @@ int main(int argc, char* argv[]){
 #ifdef GIVENIC
   strcat(command_base," input N");
   argctarget += 2;
+#endif
+  
+#ifdef SLABIC
+  strcat(command_base," rho_g rho_ell liquid_fraction");
+  argctarget += 3;
 #endif
   
 #ifdef CLOSEDBC
@@ -255,34 +282,40 @@ int main(int argc, char* argv[]){
 #endif
   
   i++;
-  rho0             = strtod(argv[i], NULL); i++;  
-  Param.Lx         = strtod(argv[i], NULL); i++;
-  Param.Ly         = strtod(argv[i], NULL); i++;
-  Param.dt         = strtod(argv[i], NULL); i++;
-  Param.v0         = strtod(argv[i], NULL); i++;
-  Param.Dr         = strtod(argv[i], NULL); i++;
-  Param.Dt         = strtod(argv[i], NULL); i++;
-  Param.mu         = strtod(argv[i], NULL); i++;
-  Param.sigma      = strtod(argv[i], NULL); i++;
-  Param.epsilon    = strtod(argv[i], NULL); i++; 
-  seed             = (long long) strtod(argv[i], NULL); i++;
-  FinalTime        = strtod(argv[i], NULL); i++;
-  EquilibTimePos   = strtod(argv[i], NULL); i++;
-  StoreInterPos    = strtod(argv[i], NULL); i++;
-  Param.rbox       = strtod(argv[i], NULL); i++;
-  width            = (int) strtod(argv[i], NULL); i++;
-  rhomax           = strtod(argv[i], NULL); i++;
-  HistoInter       = strtod(argv[i], NULL); i++;
-  StoreHistoInter  = strtod(argv[i], NULL); i++;
+  rho0              = strtod(argv[i], NULL); i++;  
+  Param.Lx          = strtod(argv[i], NULL); i++;
+  Param.Ly          = strtod(argv[i], NULL); i++;
+  Param.dt          = strtod(argv[i], NULL); i++;
+  Param.v0          = strtod(argv[i], NULL); i++;
+  Param.Dr          = strtod(argv[i], NULL); i++;
+  Param.Dt          = strtod(argv[i], NULL); i++;
+  Param.mu          = strtod(argv[i], NULL); i++;
+  Param.sigma       = strtod(argv[i], NULL); i++;
+  Param.epsilon     = strtod(argv[i], NULL); i++; 
+  seed              = (long long) strtod(argv[i], NULL); i++;
+  FinalTime         = strtod(argv[i], NULL); i++;
+  EquilibTimePos    = strtod(argv[i], NULL); i++;
+  StoreInterPos     = strtod(argv[i], NULL); i++;
+  Param.rbox        = strtod(argv[i], NULL); i++;
+  width             = (int) strtod(argv[i], NULL); i++;
+  rhomax            = strtod(argv[i], NULL); i++;
+  HistoInter        = strtod(argv[i], NULL); i++;
+  StoreHistoInter   = strtod(argv[i], NULL); i++;
 
 #ifdef GIVENIC
   sprintf(name,"%s",argv[i]);i++;
   printf("read from file %s\n",name);
-  Param.N          = (long) strtod(argv[i], NULL); i++;
+  Param.N           = (long) strtod(argv[i], NULL); i++;
   printf("N is %ld\t rho is %lg\n",Param.N,Param.N/Param.Lx/Param.Ly);
-  input            = fopen(name,"r");
+  input             = fopen(name,"r");
 #endif
-  
+
+#ifdef SLABIC
+  rhog              = strtod(argv[i], NULL); i++;
+  rhol              = strtod(argv[i], NULL); i++;
+  liquidfraction    = strtod(argv[i], NULL); i++;
+#endif
+
 #ifdef CLOSEDBC
   Param.Omega       = strtod(argv[i], NULL); i++;
   Param.nu          = strtod(argv[i], NULL); i++;
@@ -320,6 +353,12 @@ int main(int argc, char* argv[]){
 #else
   Param.N             = (long) (rho0*Param.Lx*Param.Ly);
 #endif
+#endif
+
+#ifdef SLABIC
+  Ngas                = (long) ( rhog * Param.Lx *Param.Ly * (1-liquidfraction) );
+  Nliquid             = (long) ( rhol * Param.Lx *Param.Ly * liquidfraction     );
+  Param.N             = Ngas+Nliquid;
 #endif
   
   Particles           = (particle*) malloc(Param.N*sizeof(particle));
@@ -483,6 +522,123 @@ int main(int argc, char* argv[]){
     }
   }
 #endif    
+
+#ifdef SLABIC
+  /*
+    We create two hexagonal lattices of widths (Lx liquidfraction) and
+    Lx (1-liquidfraction) to place liquid and gas particles.
+
+    The lattice spacing is 0.9 sigma so that particles do not interact
+    too strongly.
+
+    The number of particles in the phases are Nliquid and Ngas,
+    respectively
+  */
+  
+  a = Param.sigma;
+  h = a*cos(M_PI/6.);
+  //Number of sites in x direction in liquid phase
+  NxL = (floor) (Param.Lx * liquidfraction     / a );
+  //Number of sites in x direction in gas phase
+  NxG = (floor) (Param.Lx * (1-liquidfraction) / a );
+  //Number of sites in y direction
+  Ny  = (floor) (Param.Ly / h );
+  //Total number of free sites in each phase
+  NsitesGas=NxG*Ny;
+  NsitesLiq=NxL*Ny;
+  //We create the corresponding lattices, which are currently empty
+  GasPhase    = (int*) calloc(NsitesGas,sizeof(int));
+  LiquidPhase = (int*) calloc(NsitesLiq,sizeof(int));
+  //if there are enough spaces for the Ngas particles
+  if(Ngas<NsitesGas){
+    for(i=0;i<Ngas;i++){
+      int bool=1;
+      // We pull a site at random and place the particle there if the
+      // site is not occupied
+      while(bool==1){
+	k=genrand64_int63()%NsitesGas;
+	if(GasPhase[k]==0){
+	  GasPhase[k]=1;
+	  bool=0;
+	}
+      }
+    }
+  }
+  else{
+    printf("Not enough gas sites\n");
+    exit(1);
+  }
+
+  //if there are enough sites for the Nliquid particles
+  if(Nliquid<NsitesLiq){
+    for(i=0;i<Nliquid;i++){
+      int bool=1;
+      // We pull a site at random and place the particle there if the
+      // site is not occupied
+      while(bool==1){
+	k=genrand64_int63()%NsitesLiq;
+	if(LiquidPhase[k]==0){
+	  LiquidPhase[k]=1;
+	  bool=0;
+	}
+      }
+    }
+  }
+  else{
+    printf("Not enough liquid sites\n");
+    exit(1);
+  }
+  
+  fprintf(outputparam,"Actual gas density is %lg\n", Ngas/Param.Lx/Param.Ly*(1-liquidfraction));
+  fprintf(outputparam,"Actual liquid density  is %lg\n", Nliquid/Param.Lx/Param.Ly*(1-liquidfraction));
+  
+  // We now place particles in Particles, given the arrays
+  //nb is the label of the particle to be placed. 
+  nb=0;
+  //We start with the particles in NsitesLiq. We go through all the
+  //sites of the lattice LiquidPhase.
+  for(i=0;i<NsitesLiq;i++){
+    //If it is occupied, place the particle.
+    if(LiquidPhase[i]==1){
+      //we know that i = k + NxL * j
+      k=i%NxL;
+      j=(i-k)/NxL;
+      //Compute the corresponding x. The left end of the liquid phase
+      //is at Lx (1-liquidfraction). Depending on whether the line is
+      //even or odd, there is an a/2 offset
+      Particles[nb].x= (1-liquidfraction) * Param.Lx * .5 + k*a + a * .5 * (j%2) ;
+      Particles[nb].y=j*h;
+      Particles[nb].theta = 2*M_PI*genrand64_real2();
+      nb++;
+    }
+  }
+  //Let's do the same with the gas phase. x starts at (1+liquid
+  //fraction)Lx but we have to use periodic boundary conditions
+  for(i=0;i<NsitesGas;i++){
+    if(GasPhase[i]==1){
+      k=i%NxG;
+      j=(i-k)/NxG;
+      Particles[nb].x= (1+liquidfraction) * Param.Lx *.5 + k*a + a * .5 * (j%2);
+      if(Particles[nb].x>Param.Lx)
+	Particles[nb].x -= Param.Lx;
+      Particles[nb].y=j*h;
+      Particles[nb].theta = 2*M_PI*genrand64_real2();
+      nb++;
+    }
+  }
+  printf("Total number of particles placed %d\n",nb);
+  printf("Planned number of particles %ld\n",Ngas+Nliquid);
+  if(nb!=Param.N){
+    printf("Wrong number of particles placed\n");
+    exit(1);
+  }
+  free(GasPhase);
+  free(LiquidPhase);
+  for(i=0;i<Param.N;i++){
+    fprintf(outputpos,"%lg\t%dq\t%lg\t%lg\t%lg\n",_time,i,Particles[i].x,Particles[i].y,Particles[i].theta);
+  }
+#endif
+
   
   /* Store parameters */
   fprintf(outputparam,"%s\n",command_base);
@@ -655,7 +811,8 @@ int main(int argc, char* argv[]){
 #ifdef GIVENIC
   fclose(input);
 #endif
-    
+
+
   return 1;
 }
 

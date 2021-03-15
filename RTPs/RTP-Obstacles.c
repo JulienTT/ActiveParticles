@@ -108,9 +108,10 @@ int main(int argc,char* argv[]){
   double EquilibTimeDensity;      // Interval during which no recording or measurement of density is made
   FILE* outputdens;               // File where currents and densities are stored
   
-  FILE* outputpos; // where positions of particles are stored
-  FILE* outputobs; // where positions of obstacles are stored
-  char name[100];
+  FILE* outputpos;   // where positions of particles are stored
+  FILE* outputparam; // where positions of particles are stored
+  FILE* outputobs;   // where parameters of simulations are stored
+  char name[100];    // String where file names is written
   
   double EquilibTimePos; //time after which recordings start for positions
   double StoreInterPos; // Interval at which positions are stored
@@ -128,7 +129,6 @@ int main(int argc,char* argv[]){
     printf("%s\n",command_base);
     exit(1);
   }
-  
   // Create an array of N particles
   i=1;
   
@@ -144,6 +144,11 @@ int main(int argc,char* argv[]){
   sprintf(name,"%s-dens",argv[i]);
   outputdens=fopen(name,"w");
 
+  //File where parameters are stored
+  sprintf(name,"%s-param",argv[i]);
+  outputparam=fopen(name,"w");
+
+  
   i++;
   
   Param.N           = (long) strtod(argv[i], NULL); i++;
@@ -310,6 +315,33 @@ int main(int argc,char* argv[]){
   for(i=0;i<Param.N;i++){
     Place_Particle(i,Particles,Param,Obstacles);
   }
+  
+  /* Store parameters for reproducibility */
+  fprintf(outputparam,"%s\n",command_base);
+  for(i=0;i<argc;i++){
+    fprintf(outputparam,"%s ",argv[i]);
+  }
+  fprintf(outputparam,"\n");
+  
+  fprintf(outputparam,"Number of particles %lg\n", Param.N);
+  fprintf(outputparam,"seed is %lld\n", seed);
+  fprintf(outputparam,"Total time is %lg\n",totaltime);
+  fprintf(outputparam,"Lx is %lg\n", Param.Lx);
+  fprintf(outputparam,"Ly is %lg\n", Param.Ly);
+  fprintf(outputparam,"Tumbling rate is alpha=%lg\n", Param.alpha);
+  fprintf(outputparam,"v0 is %lg\n", Param.v0);
+  fprintf(outputparam,"dt is %lg\n", Param.dt);
+  fprintf(outputparam,"Number of obstacles is %lg\n", Param.Nobs);
+  fprintf(outputparam,"Obstacle radius is sigma=%lg\n", Param.sigma);
+  
+  fprintf(outputparam,"Time before recording of position is EquilibTimePos=%lg\n", EquilibTimePos);
+  fprintf(outputparam,"Interval between recording of positions is StoreInterPos=%lg\n", StoreInterPos);
+  
+  fprintf(outputparam,"Time before recording of density is EquilibTimeDensity=%lg\n", EquilibTimePos);
+  fprintf(outputparam,"Interval between recording of density is InterDensity=%lg\n", StoreInterPos);
+  
+  fprintf(outputparam,"Bin width for density histogram is %lg\n", Param.dr);
+  fflush(outputparam);
   
   /* IMPLEMENTATION OF THE DYNAMICS */
   printf("Implement dynamics\n");

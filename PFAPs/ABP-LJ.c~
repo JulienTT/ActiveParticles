@@ -635,10 +635,8 @@ int main(int argc, char* argv[]){
   free(GasPhase);
   free(LiquidPhase);
   for(i=0;i<Param.N;i++){
-    fprintf(outputpos,"%lg\t%d\t%lg\t%lg\t%lg\n",_time,i,Particles[i].x,Particles[i].y,Particles[i].theta);
+    fprintf(outputpos,"%lg\t%dq\t%lg\t%lg\t%lg\n",_time,i,Particles[i].x,Particles[i].y,Particles[i].theta);
   }
-  fprintf(outputpos,"\n");
-  
 #endif
 
   

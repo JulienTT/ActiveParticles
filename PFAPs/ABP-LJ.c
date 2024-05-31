@@ -1,8 +1,3 @@
-// TODO: boxes and BC in the closed case
-// Check what happens when particles exit boxes
-
-// Initial condition: add a slab IC using triangular lattice
-
 /*
   2021-02-24 
   This code simulates the dynamics of active Brownian particles whose dynamics is given by
@@ -13,67 +8,22 @@
 */
 
 
-#define LJ
-/*
-  We use Lennard-Jones interactions for F = -\grad V where
-  
-  V=4 epsilon (sigma^12/r^12-sigma^6/r^6)
-  
-  We use a cut-off at r=sigma*2.7
-  
-  There is for now no adaptative time-stepping because of the order dt and \sqrt{dt}.
-  
-*/
-
-//#define WCA
-/*
-  We use WCA potential for F = -\grad V where
-  
-  V=4 epsilon (sigma^12/r^12-sigma^6/r^6)
-  
-  We use a cut-off at r=sigma*2^1/6
-  
-  There is for now no adaptative time-stepping because of the order dt and \sqrt{dt}.
-  
-*/
-
-
-
-/*
-  Choose the initial condition (IC) between random IC, if RANDOMIC is
-  defined, or read from an input if GIVENIC is defined, or SLABIC to
-  start in a slab configuration
-*/
-
-//#define RANDOMIC
-//#define GIVENIC
-#define SLABIC
-
-/*
-  Choose the boundary conditions between periodic, if PBC is defined,
-  and closed along x, if CLOSEDBC is defined
-  
-  If closed boundary conditions are used, then a confining potential
-  is inserted INSIDE the box, to keep the particles far away from the
-  periodic boundary condition of the cell. If particles get close
-  enough to the wall, the program protests.
-  
-*/
-#define PBC
-//#define CLOSEDBC
-
-/*
-  Uncomment to compute the pressure exerted on right and left walls
-*/
-//#define PRESSURE
+// This sets the options used in this code
+#include "./Options.h"
 
 #define EPS 1e-10
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#ifdef _MT
 #include "mt19937-64.c"
+#endif
+#ifdef _PCG
+#include "pcg_variants.h"
+#include "pcg_julien.h"
+#endif
+
 #include <time.h>
 
 // Structure particles which contains all the data needed to characterize the state of a particle
@@ -85,6 +35,7 @@ typedef struct particle{
   long bj; // position of box along y axis
 } particle;
 
+// Structure used to compute forces in the presence of periodic boundary conditions
 typedef struct box{
   long i; // position of box along x axis
   long j; // position of box along y axis
@@ -92,8 +43,10 @@ typedef struct box{
   double epsilony; //distance to add along y to take into account PBC
 } box;
 
-// Structure param contains the parameters of the code that will be passed to functions in a compact way
-struct param {
+// Structure param contains the parameters of the code that will be
+// passed to functions in a compact way. This starts to be long and
+// could be cut
+typedef struct param {
   long N;  // number of particles
   double Lx; // system size
   double Ly;
@@ -108,9 +61,17 @@ struct param {
   double epsilon; // amplitude of the potential
   double sigma; //translational diffusivity
   double sigma2; //sigma^2
+#if defined(WCA) || defined(LJ)
   double sigma6; //sigma^6
   double rmax2;  // interaction cut-off (squared)
   double amp; //used to compute the force
+#endif
+#if defined(HARMONIC)
+  double sigma; //sigma
+  double k;  // stiffness
+  double ksigma; //used to compute the force
+#endif
+  
   double mu; //particle mobility
   
   // Parameters of the spatial hashing
@@ -121,32 +82,61 @@ struct param {
 
 #ifdef CLOSEDBC
   /*
-    The potential is Omega/nu (x_wall_left-x)^nu and (x-x_wall_right)^nu
+    The confining potential is Omega/nu (x_wall_left-x)^nu and (x-x_wall_right)^nu
   */
   double x_wall_left;
   double x_wall_right;
   double Omega;
   double nu;
 #endif
-};
+} param;
 
 #include "ABP-LJ-functions.c"
 
 int main(int argc, char* argv[]){
   
-  /* Variable declaration */
-  long i,j,k,i1,j1; // counter
-  time_t time_clock; // current physical time
-  double _time; // current time
-  double rho0;
+  /* VARIABLE DECLARATIONe */
+  long i,j,k,i1,j1;    // counters
+  time_t time_clock;   // current physical time
+  double _time;        // current time
+  double rho0;         // average density in the system
+  char command_base[1000]=""; // string that contains the desired format of the command line
   
+  double FinalTime;    // final time of the simulation
+  particle* Particles; // arrays containing the particles
+  param Param;  // Structure containing the parameters
+#ifdef _MT
+  long long seed;      // see of the random number generator
+#endif
+#ifdef _PCG
+  pcg128_t seed;       // see of the random number generator
+#endif
+  
+  double* forces ;     // forces[2*i] is the force along x on part. i
+	               // forces[2*i+1] is the force along y on
+	               // particle i.
+  
+  long** Box;          // array containing the first particles in the
+                       // box Box[i][j]=k means the first particle in
+                       // box i,j is Particle[k]
+  
+  long* Neighbours;    // array containing the neighbours of each
+		       // particle in a box. Neighbours[2*i+1]=k means
+		       // the next particle after i is k. k=-1 means i
+		       // is the last particle. Neighbours[2*i]=k
+		       // means the particle before i is k. k=-1 means
+		       // the particle is the first in the box.
+
+  box *** NeighbouringBoxes; //Neighbouringboxes[i][j] contains the
+			     //list of neighbouring boxes of box (i,j)
+
   /* SPECIFIC TO HISTOGRAMS
-    To construct a histogram of the data, we average over a period
-    StoreHistoInter in an array histogram. We bin together several
-    neighbouring boxes, over a linear size width, so that the
-    resolution is 1/width^2.
-    
-    At the end, we plot rho*sigma^2 so that the resolution is  (sigma/width)^2
+     To construct a histogram of the data, we average over a period
+     StoreHistoInter in an array histogram. We bin together several
+     neighbouring boxes, over a linear size width, so that the
+     resolution is 1/width^2.
+     
+     At the end, we plot rho*sigma^2 so that the resolution is  (sigma/width)^2
   */
   FILE* outputhisto;       // File in which histogram of the density is stored
   double* histogram;       // array in which the density histograms is computed
@@ -161,47 +151,21 @@ int main(int argc, char* argv[]){
   double boxarea;          // Area of the box over which densities are computed
   long n0,part;            // counter of particles
   double histocount;       // Number of times a density is recorded
-
+  
   /* SPECIFIC TO RECORDING OF POSITIONS */
-
+  
   double EquilibTimePos; //time after which recordings start for positions
   double StoreInterPos; // Interval at which positions are stored
   double NextStorePos; // next time at which positions are stored
   FILE* outputpos, *outputparam; // Files in which data and parameters are stored
   double* density; //density[i] is the density of particle around particle i
-
-  /* OTHER VARIABLES */
   
-  double FinalTime; //final time of the simulation
-  particle* Particles; // arrays containing the particles
-  struct param Param; // Structure containing the parameters
-  long long seed; // see of the random number generator
-  char name[200]; // string in which the file names are written
-
-  
-  double* forces ;   // This array is used to compute the forces exerted
-	             // on the particles. forces[2*i] is the force along
-	             // x on particle i. forces[2*i+1] is the force
-	             // along y on particle i.
-  
-  long** Box;        // array containing the first particles in the box
-                     // Box[i][j]=k means the first particle in box i,j is k.
-  
-  long* Neighbours;  // array containing the neighbours of each
-		     // particle. Neighbours[2*i+1]=k means the next
-		     // particle after i is k. k=-1 means i is the
-		     // last particle. Neighbours[2*i]=k means the
-		     // particle before i is k. k=-1 means the particle
-		     // is the first in the box.
-  box *** NeighbouringBoxes;
-
 #ifdef PRESSURE
   /*
     pressure[0] is the force exerted on the left wall
     pressure[1] is the force exerted on the right wall
   */
   double* pressure = (double*) calloc(sizeof(double),2);
-  double  Energypot=0;         // Use to compute the average potential energy
   FILE*   outputpressure;      // File in which histogram of the density is stored
   double  NextStorePressure;   // Next time at which to store the histogram
   double  StorePressureInter;  // Interval between two storage of the histogram
@@ -215,137 +179,62 @@ int main(int argc, char* argv[]){
 #ifdef SLABIC
   double rhog; // density of particle in the gas phase
   double rhol; // density of particle in the liquid phase
-  double liquidfraction; // fraction of system starting in the liquid phase
   long Ngas;    // Number of particles in the gas
   long Nliquid; // Number of particles in the liquid
-  double a; //horizontal lattice spacing
-  double h; //heiht between two layers. Equal to a*cos(pi/6)
-  int NxL; //number of rows in the lattice for the liquid phase
-  int NxG; //number of rows in the lattice for the gas phase
-  int Ny;  //number of lines in the lattices
-  long NsitesGas; //Total number of available sites in the gas phase
-  long NsitesLiq; //Total number of available sites in the liquid phase
-  int* GasPhase; //Lattice of gas phase
-  int* LiquidPhase;//Lattice of gas phase
-  long nb; //Number of particles placed so far
+  double liquidfraction; // fraction of system starting in the liquid phase
+#endif
+
+#ifdef OBSERVABLE
+  double Energy;
+  double NextStoreEnergy;
+  double StoreInterEnergy;
+  FILE* outputenergy;      // File in which histogram of the density is stored
 #endif
   
   /* Read parameters of the simulation*/
   
-  int argctarget=21;
-  char command_base[1000]="";
-  strcat(command_base, "usage: ");
-  strcat(command_base, argv[0]);
-  strcat(command_base," file rho0 Lx Ly dt v0 Dr Dt mu sigma epsilon seed FinalTime EquilibTimePos StoreInterPos rbox width rhomax HistoInter StoreHistoInter");
-  
+  // Take input from command line, check that their number is correct and store them
+  CheckAndReadInput(command_base,argc,argv,&rho0,&Param,&seed,&FinalTime,&EquilibTimePos,&StoreInterPos,&width,&rhomax,&HistoInter,&StoreHistoInter,&outputparam,&outputpos,&outputhisto
+#ifdef PRESSURE
+		    ,&outputpressure,&StorePressureInter,&average_density
+#endif
 #ifdef GIVENIC
-  strcat(command_base," input N");
-  argctarget += 2;
+		    ,&input
 #endif
-  
 #ifdef SLABIC
-  strcat(command_base," rho_g rho_ell liquid_fraction");
-  argctarget += 3;
+		    ,&rhog,&rhol,&liquidfraction
 #endif
-  
-#ifdef CLOSEDBC
-  strcat(command_base," Omega nu x_wall_left x_wall_right");
-  argctarget += 4;
+#ifdef OBSERVABLE
+		    ,&outputenergy,&StoreInterEnergy
 #endif
-  
-#ifdef PRESSURE
-  strcat(command_base," StorePressureInter");
-  argctarget += 1;
-#endif
-  if(argc!=argctarget){
-    printf("%s\n",command_base);
-    exit(1);
-  }
-  
-  i=1;
-  //File where parameters are stored
-  sprintf(name,"%s-param",argv[i]);
-  outputparam=fopen(name,"w");
-  
-  //File where positions are stored
-  sprintf(name,"%s-pos",argv[i]);
-  outputpos=fopen(name,"w");
-
-  //File where histogram is stored
-  sprintf(name,"%s-histo",argv[i]);
-  outputhisto=fopen(name,"w");
-
-#ifdef PRESSURE
-  //File where histogram is stored
-  sprintf(name,"%s-pressure",argv[i]);
-  outputpressure=fopen(name,"w");
-#endif
-  
-  i++;
-  rho0              = strtod(argv[i], NULL); i++;  
-  Param.Lx          = strtod(argv[i], NULL); i++;
-  Param.Ly          = strtod(argv[i], NULL); i++;
-  Param.dt          = strtod(argv[i], NULL); i++;
-  Param.v0          = strtod(argv[i], NULL); i++;
-  Param.Dr          = strtod(argv[i], NULL); i++;
-  Param.Dt          = strtod(argv[i], NULL); i++;
-  Param.mu          = strtod(argv[i], NULL); i++;
-  Param.sigma       = strtod(argv[i], NULL); i++;
-  Param.epsilon     = strtod(argv[i], NULL); i++; 
-  seed              = (long long) strtod(argv[i], NULL); i++;
-  FinalTime         = strtod(argv[i], NULL); i++;
-  EquilibTimePos    = strtod(argv[i], NULL); i++;
-  StoreInterPos     = strtod(argv[i], NULL); i++;
-  Param.rbox        = strtod(argv[i], NULL); i++;
-  width             = (int) strtod(argv[i], NULL); i++;
-  rhomax            = strtod(argv[i], NULL); i++;
-  HistoInter        = strtod(argv[i], NULL); i++;
-  StoreHistoInter   = strtod(argv[i], NULL); i++;
-
-#ifdef GIVENIC
-  sprintf(name,"%s",argv[i]);i++;
-  printf("read from file %s\n",name);
-  Param.N           = (long) strtod(argv[i], NULL); i++;
-  printf("N is %ld\t rho is %lg\n",Param.N,Param.N/Param.Lx/Param.Ly);
-  input             = fopen(name,"r");
-#endif
-
-#ifdef SLABIC
-  rhog              = strtod(argv[i], NULL); i++;
-  rhol              = strtod(argv[i], NULL); i++;
-  liquidfraction    = strtod(argv[i], NULL); i++;
-#endif
-
-#ifdef CLOSEDBC
-  Param.Omega       = strtod(argv[i], NULL); i++;
-  Param.nu          = strtod(argv[i], NULL); i++;
-  Param.x_wall_left = strtod(argv[i], NULL); i++;
-  Param.x_wall_right= strtod(argv[i], NULL); i++;
-#endif
-  
-#ifdef PRESSURE
-  StorePressureInter = strtod(argv[i], NULL); i++;
-  average_density    = 0;
-#endif
+		    );
   
   /* Initialize variables */
+#ifdef _MT
   init_genrand64(seed);
+#endif
+#ifdef _PCG
+  pcg64_srandom(seed,123); 
+#endif
   _time               = 0;
-  
   Param.sqrt2Drdt     = sqrt(2*Param.Dr*Param.dt);
   Param.sqrt2Dtdt     = sqrt(2*Param.Dt*Param.dt);
-  
   NextStorePos        = EquilibTimePos;
-
-#ifdef LJ
+  
+#if defined LJ
   Param.rmax2         = 7.29*Param.sigma*Param.sigma;   // The cutoff is at 2.7*sigma (2.7*2.7=7.29)
 #endif
+
 #ifdef WCA
-  Param.rmax2         = pow(2,1./3.)*Param.sigma*Param.sigma;   // The cutoff is at 2.7*sigma (2.7*2.7=7.29)
+  Param.rmax2         = pow(2,1./3.)*Param.sigma*Param.sigma;   // The cutoff is at 2^{1/6}*sigma
 #endif
+
   Param.sigma2        = pow(Param.sigma,2);
+
+#if defined(WCA) || defined (LJ)
   Param.sigma6        = pow(Param.sigma,6);
   Param.amp           = 24*Param.epsilon*Param.sigma6;
+#endif
   
 #ifdef RANDOMIC
 #ifdef CLOSEDBC
@@ -354,7 +243,7 @@ int main(int argc, char* argv[]){
   Param.N             = (long) (rho0*Param.Lx*Param.Ly);
 #endif
 #endif
-
+  
 #ifdef SLABIC
   Ngas                = (long) ( rhog * Param.Lx *Param.Ly * (1-liquidfraction) );
   Nliquid             = (long) ( rhol * Param.Lx *Param.Ly * liquidfraction     );
@@ -366,7 +255,7 @@ int main(int argc, char* argv[]){
   forces              = (double*) calloc(Param.N*2,sizeof(double));
   
   // Create boxes in which to store particles for the spatial hashing
-  Param.rbox2 = Param.rbox * Param.rbox;
+  Param.rbox2         = Param.rbox * Param.rbox;
   
   //Parameters for the histogram
   boxarea         = width*width*Param.rbox*Param.rbox;
@@ -379,23 +268,25 @@ int main(int argc, char* argv[]){
 #ifdef PRESSURE
   NextStorePressure = StorePressureInter;
 #endif
+
+#ifdef OBSERVABLE
+  Energy=0;
+  NextStoreEnergy   = StoreInterEnergy;
+#endif
   
-  if(Param.rbox2<Param.rmax2){
-    printf("Box size smaller than interaction length\n");
-    exit(1);
-  }
+  
+#if defined(WCA) || defined(LJ)
+  if(Param.rbox2<Param.rmax2)
+    ERROR("Box size smaller than interaction length\n");
+#endif
   
   Param.NxBox = (long) (floor(Param.Lx/Param.rbox)+EPS);
-  if(fabs((double)Param.NxBox*Param.rbox-Param.Lx)>EPS){
-    printf("Lx has to be a multiple of rbox");
-    exit(1);
-  }
+  if(fabs((double)Param.NxBox*Param.rbox-Param.Lx)>EPS)
+    ERROR("Lx has to be a multiple of rbox");
   
   Param.NyBox = (long) (floor(Param.Ly/Param.rbox)+EPS);
-  if(fabs((double)Param.NyBox*Param.rbox-Param.Ly)>EPS){
-    printf("Ly has to be a multiple of rbox, right now %lg / %lg = %lg",Param.Ly,Param.rbox,Param.Ly/Param.rbox);
-    exit(1);
-  }
+  if(fabs((double)Param.NyBox*Param.rbox-Param.Ly)>EPS)
+    ERROR("Ly has to be a multiple of rbox");
   
   Box       = (long**) malloc(Param.NxBox*sizeof(long*));
   // Boxes are initialized as empty
@@ -416,276 +307,42 @@ int main(int argc, char* argv[]){
   //may interact with those in box i epsilonx and epsilony are offset
   //that are used for periodic boundary conditions
   NeighbouringBoxes = (box***) malloc(Param.NxBox*sizeof(box**));
-  for (i=0;i<Param.NxBox;i++){
-    NeighbouringBoxes[i] = (box**) malloc(Param.NyBox*sizeof(box*));
-    for (j=0;j<Param.NyBox;j++){
-      NeighbouringBoxes[i][j] = (box*) malloc(5*sizeof(box));
-      
-      // This is the same box
-      NeighbouringBoxes[i][j][0].i=i;
-      NeighbouringBoxes[i][j][0].j=j;
-      NeighbouringBoxes[i][j][0].epsilonx=0;
-      NeighbouringBoxes[i][j][0].epsilony=0;
-      
-      // The box above
-      NeighbouringBoxes[i][j][1].i=i;
-      NeighbouringBoxes[i][j][1].j=(j+1)%Param.NyBox;
-      NeighbouringBoxes[i][j][1].epsilonx=0;
-      NeighbouringBoxes[i][j][1].epsilony=(j==Param.NyBox-1)?(Param.Ly):0;
-
-      // The box above, to the right
-      NeighbouringBoxes[i][j][2].i=(i+1)%Param.NxBox;
-      NeighbouringBoxes[i][j][2].j=(j+1)%Param.NyBox;
-      NeighbouringBoxes[i][j][2].epsilonx=(i==Param.NxBox-1)?(Param.Lx):0;
-      NeighbouringBoxes[i][j][2].epsilony=(j==Param.NyBox-1)?(Param.Ly):0;
-
-      // The box to the right
-      NeighbouringBoxes[i][j][3].i=(i+1)%Param.NxBox;
-      NeighbouringBoxes[i][j][3].j=j;
-      NeighbouringBoxes[i][j][3].epsilonx=(i==Param.NxBox-1)?(Param.Lx):0;
-      NeighbouringBoxes[i][j][3].epsilony=0;
-
-      // The box below, to the right
-      NeighbouringBoxes[i][j][4].i=(i+1)%Param.NxBox;
-      NeighbouringBoxes[i][j][4].j=(j-1+Param.NyBox)%Param.NyBox;
-      NeighbouringBoxes[i][j][4].epsilonx=(i==Param.NxBox-1)?(Param.Lx):0;
-      NeighbouringBoxes[i][j][4].epsilony=(j==0)?(-Param.Ly):0;
-    }
-  }
+  DefineNeighbouringBoxes(NeighbouringBoxes,Param);
   
   /* Setup initial conditions */
   printf("Particle initialisation\n");
-
+  
   // On a lattice
   //Particles[i].x=(i/d)*Param.Lx/d+Param.rmin*genrand64_real3();
   //Particles[i].y=(i%d)*Param.Ly/d+Param.rmin*genrand64_real3();    
-
+  
 #ifdef RANDOMIC
-  /*
-    This should be replaced by a rejection method on a triangular
-    lattice of length .9 sigma.
-   */
-  for(i=0;i<Param.N;i++){
-    double mindist2,distance2;
-    
-    /* 
-       Here we uniformly randomly draw particles one by one, rejecting
-       a particle's initial position if it's too close to another.To
-       be used for hard core interaction.
-    */
-    mindist2 = 0;//initialization so that we pass at least once in the loop.
-    
-    while(mindist2<.8*Param.sigma2){//Critère un peu arbitraire...
-      mindist2=Param.Lx*Param.Ly;
-
-#ifdef CLOSEDBC
-      Particles[i].x = Param.x_wall_left+(Param.x_wall_right-Param.x_wall_left)*genrand64_real3();
-#else
-      Particles[i].x = Param.Lx*genrand64_real3();
-#endif
-      Particles[i].y = Param.Ly*genrand64_real3();
-      for(j=0;j<i;j++){
-	distance2 = Distance2(Particles,i,j,Param);
-	if(distance2<mindist2)
-	  mindist2=distance2;
-      }
-      //printf("particle %ld, min distance %lg\n",i,sqrt(mindist2));
-    }
-    
-    Particles[i].theta = 2*M_PI*genrand64_real2();
-    
-    //Add particle in the good box.
-    Particles[i].bi    = floor(Particles[i].x/Param.rbox);
-    Particles[i].bj    = floor(Particles[i].y/Param.rbox);
-    AddinBox(i,Particles[i].bi,Particles[i].bj,Box,Neighbours);
-  }
-  printf("Smallest distance %lg\n",SmallestDistance(Particles,Param));
+  Place_Random_IC_Continuous(Param,Particles,Box,Neighbours);
 #endif    
   
 #ifdef GIVENIC
-  for(i=0;i<Param.N;i++){
-    double x,y,theta;
-    if(fscanf(input,"%*lg\t%*d\t%lg\t%lg\t%lg\t%*lg\n",&x,&y,&theta)!=EOF){
-      Particles[i].x=x;
-      Particles[i].y=y;
-      Particles[i].theta=theta;
-      //printf("Particle %ld at %lg %lg with angle %lg\n",i,x,y,theta);
-      
-      //Add particle in the good box.
-      Particles[i].bi    = floor(Particles[i].x/Param.rbox);
-      Particles[i].bj    = floor(Particles[i].y/Param.rbox);
-      AddinBox(i,Particles[i].bi,Particles[i].bj,Box,Neighbours);
-    }
-    else{
-      printf("Not the right number of lines\n");
-      exit(1);
-    }
-  }
+  Place_Given_IC(Param,input,Particles,Box,Neighbours);
 #endif    
-
+    
 #ifdef SLABIC
-  /*
-    We create two hexagonal lattices of widths (Lx liquidfraction) and
-    Lx (1-liquidfraction) to place liquid and gas particles.
+  Place_Slab_IC_Lattice(Param,liquidfraction,outputparam,Particles,Box,Neighbours,Ngas,Nliquid);
+#endif
 
-    The lattice spacing is 0.9 sigma so that particles do not interact
-    too strongly.
-
-    The number of particles in the phases are Nliquid and Ngas,
-    respectively
-  */
-  
-  a = Param.sigma;
-  h = a*cos(M_PI/6.);
-  //Number of sites in x direction in liquid phase
-  NxL = (floor) (Param.Lx * liquidfraction     / a );
-  //Number of sites in x direction in gas phase
-  NxG = (floor) (Param.Lx * (1-liquidfraction) / a );
-  //Number of sites in y direction
-  Ny  = (floor) (Param.Ly / h );
-  //Total number of free sites in each phase
-  NsitesGas=NxG*Ny;
-  NsitesLiq=NxL*Ny;
-  //We create the corresponding lattices, which are currently empty
-  GasPhase    = (int*) calloc(NsitesGas,sizeof(int));
-  LiquidPhase = (int*) calloc(NsitesLiq,sizeof(int));
-  //if there are enough spaces for the Ngas particles
-  if(Ngas<NsitesGas){
-    for(i=0;i<Ngas;i++){
-      int bool=1;
-      // We pull a site at random and place the particle there if the
-      // site is not occupied
-      while(bool==1){
-	k=genrand64_int63()%NsitesGas;
-	if(GasPhase[k]==0){
-	  GasPhase[k]=1;
-	  bool=0;
-	}
-      }
-    }
-  }
-  else{
-    printf("Not enough gas sites\n");
-    exit(1);
-  }
-
-  //if there are enough sites for the Nliquid particles
-  if(Nliquid<NsitesLiq){
-    for(i=0;i<Nliquid;i++){
-      int bool=1;
-      // We pull a site at random and place the particle there if the
-      // site is not occupied
-      while(bool==1){
-	k=genrand64_int63()%NsitesLiq;
-	if(LiquidPhase[k]==0){
-	  LiquidPhase[k]=1;
-	  bool=0;
-	}
-      }
-    }
-  }
-  else{
-    printf("Not enough liquid sites\n");
-    exit(1);
-  }
-  
-  fprintf(outputparam,"Actual gas density is %lg\n", Ngas/Param.Lx/Param.Ly*(1-liquidfraction));
-  fprintf(outputparam,"Actual liquid density  is %lg\n", Nliquid/Param.Lx/Param.Ly*(1-liquidfraction));
-  
-  // We now place particles in Particles, given the arrays
-  //nb is the label of the particle to be placed. 
-  nb=0;
-  //We start with the particles in NsitesLiq. We go through all the
-  //sites of the lattice LiquidPhase.
-  for(i=0;i<NsitesLiq;i++){
-    //If it is occupied, place the particle.
-    if(LiquidPhase[i]==1){
-      //we know that i = k + NxL * j
-      k=i%NxL;
-      j=(i-k)/NxL;
-      //Compute the corresponding x. The left end of the liquid phase
-      //is at Lx (1-liquidfraction). Depending on whether the line is
-      //even or odd, there is an a/2 offset
-      Particles[nb].x= (1-liquidfraction) * Param.Lx * .5 + k*a + a * .5 * (j%2) ;
-      Particles[nb].y=j*h;
-      Particles[nb].theta = 2*M_PI*genrand64_real2();
-      nb++;
-    }
-  }
-  //Let's do the same with the gas phase. x starts at (1+liquid
-  //fraction)Lx but we have to use periodic boundary conditions
-  for(i=0;i<NsitesGas;i++){
-    if(GasPhase[i]==1){
-      k=i%NxG;
-      j=(i-k)/NxG;
-      Particles[nb].x= (1+liquidfraction) * Param.Lx *.5 + k*a + a * .5 * (j%2);
-      if(Particles[nb].x>Param.Lx)
-	Particles[nb].x -= Param.Lx;
-      Particles[nb].y=j*h;
-      Particles[nb].theta = 2*M_PI*genrand64_real2();
-      nb++;
-    }
-  }
-  printf("Total number of particles placed %d\n",nb);
-  printf("Planned number of particles %ld\n",Ngas+Nliquid);
-  if(nb!=Param.N){
-    printf("Wrong number of particles placed\n");
-    exit(1);
-  }
-  free(GasPhase);
-  free(LiquidPhase);
-  for(i=0;i<Param.N;i++){
-    fprintf(outputpos,"%lg\t%d\t%lg\t%lg\t%lg\n",_time,i,Particles[i].x,Particles[i].y,Particles[i].theta);
-  }
+  // Store Initial conditions
+  Density_TopHat_Hashing_PBC(Particles,Param,density,Box,Neighbours,NeighbouringBoxes);
+  for(i=0;i<Param.N;i++)
+    fprintf(outputpos,"%lg\t%d\t%lg\t%lg\t%lg\t%lg\n",_time,i,Particles[i].x,Particles[i].y,Particles[i].theta,density[i]*Param.sigma2);
   fprintf(outputpos,"\n");
   
-#endif
-
-  
-  /* Store parameters */
-  fprintf(outputparam,"%s\n",command_base);
-  
-  for(i=0;i<argc;i++){
-    fprintf(outputparam,"%s ",argv[i]);
-  }
-  fprintf(outputparam,"\n");
-  
-  fprintf(outputparam,"rho0 is %lg\n", rho0);
-  fprintf(outputparam,"Lx is %lg\n", Param.Lx);
-  fprintf(outputparam,"Ly is %lg\n", Param.Ly);
-  fprintf(outputparam,"dt is %lg\n", Param.dt);
-  fprintf(outputparam,"v0 is %lg\n", Param.v0);
-  fprintf(outputparam,"Dr is %lg\n", Param.Dr);
-  fprintf(outputparam,"Dt is %lg\n", Param.Dt);
-  fprintf(outputparam,"sigma is %lg\n", Param.sigma);
-  fprintf(outputparam,"epsilon is %lg\n", Param.epsilon);
-  fprintf(outputparam,"seed is %lld\n", seed);
-  fprintf(outputparam,"FinalTime is %lg\n",FinalTime);
-  fprintf(outputparam,"EquilibTimePos is %lg\n", EquilibTimePos);
-  fprintf(outputparam,"StoreInterPos is %lg\n", StoreInterPos);
-  fprintf(outputparam,"width is %d\n", width);
-  fprintf(outputparam,"rhomax is %lg\n", rhomax);
-  fprintf(outputparam,"histointer is %lg\n", HistoInter );
-  fprintf(outputparam,"storehistointer is %lg\n", StoreHistoInter);
-  fprintf(outputparam,"rbox is %lg\n", Param.rbox);
-  
-#ifdef CLOSEDBC
-  fprintf(outputparam,"Omega is %lg\n", Param.Omega);
-  fprintf(outputparam,"nu is %lg\n", Param.nu);
-  fprintf(outputparam,"x_wall_left is %lg\n", Param.x_wall_left);
-  fprintf(outputparam,"x_wall_right is %lg\n", Param.x_wall_right);
-#endif
-
+  //Store Parameters
+  StoreParam(Param,outputparam,command_base,argc, argv,rho0, seed,FinalTime,EquilibTimePos,StoreInterPos,width, rhomax, HistoInter,Nbin,StoreHistoInter
 #ifdef PRESSURE
-  fprintf(outputparam,"StorePressureInter is %lg\n",StorePressureInter);
+	     , StorePressureInter
 #endif
-  
-  fprintf(outputparam,"nbins is %lg\n", Nbin);
-  fprintf(outputparam,"rmax2 is %lg\n", Param.rmax2);
-  fprintf(outputparam,"rbox2 is %lg\n", Param.rbox2);
-  fprintf(outputparam,"N is %ld\n", Param.N);
-  fprintf(outputparam,"normalized packing fraction is N sigma^2 /(Lx Ly) = %lg\n", Param.N*Param.sigma*Param.sigma/Param.Lx/Param.Ly);
-  fflush(outputparam);
+#ifdef OBSERVABLE
+	     , StoreInterEnergy
+#endif
+	     );
   
   printf("Initialisation over\n");
   
@@ -695,97 +352,45 @@ int main(int argc, char* argv[]){
   
   while(_time<FinalTime){
     // Move the particles
+    Move_Particles_ABP(Particles,Param,forces,_time,Box,Neighbours,NeighbouringBoxes,outputparam
 #ifdef PRESSURE
-    Move_Particles_ABP(Particles,Param,forces,_time,Box,Neighbours,NeighbouringBoxes,outputparam,pressure,&average_density);
-#else
-    Move_Particles_ABP(Particles,Param,forces,_time,Box,Neighbours,NeighbouringBoxes,outputparam);
+		       ,pressure,&average_density
 #endif
+#ifdef OBSERVABLE
+		       ,&Energy
+#endif
+		       );
     
     // Increment time
     _time += Param.dt;
     
     //If it is time, store positions
-    if(_time>NextStorePos-EPS){
-      //Compute density
-      Density_TopHat_Hashing_PBC(Particles,Param,density,Box,Neighbours,NeighbouringBoxes);
-      
-      // Store positions, angles, packing-fraction using a particle diameter sigma
-      for(i=0 ; i<Param.N ; i++){
-	fprintf(outputpos,"%lg\t%d\t%lg\t%lg\t%lg\t%lg\n",_time,i,Particles[i].x,Particles[i].y,Particles[i].theta,density[i]*Param.sigma2);
-	//fprintf(outputpos,"%lg\t%d\t%lg\t%lg\t%lg\n",_time,i,Particles[i].x,Particles[i].y,Particles[i].theta);
-      }
-      fprintf(outputpos,"\n");
-      fflush(outputpos);
-      
-      //Increase NextStore
-      NextStorePos += StoreInterPos;
-    }
+    if(_time>NextStorePos-EPS)
+      StorePositions(Particles, Param, density,Box,Neighbours, NeighbouringBoxes,outputpos,_time,&NextStorePos,StoreInterPos);
     
     //If it is time to update the histogram
-    if(_time>NextHisto-EPS){
-      // Loop through all area of size width
-      for(i=0;i<Param.NxBox;i+=width){
-	for(j=0;j<Param.NyBox;j+=width){
-	  // initialise the number or particles in this box to zero
-	  n0=0;
-	  // loop through all the boxes in the area
-	  for(i1=i;i1<i+width;i1++){
-	    for(j1=j;j1<j+width;j1++){
-	      // Find the first particle in the box
-	      part=Box[i1][j1];
-	      // As long as there is a next particle, increment n0
-	      while(part != -1){
-		n0++;
-		part=Neighbours[2*part+1];
-	      }
-	    }
-	  }
-	  // n0 is now the total number of particle in an area of size width*r0 * width*r0;
-	  if(n0<Nbin){
-	    histogram[n0] += 1.;
-	    histocount += 1;
-	  }
-	  else{
-	    printf("rhomax too small, n0 is %d and Nbin is %d\n",n0,Nbin);
-	    fprintf(outputparam,"rhomax= %lg too small at time %lg\n",rhomax,_time);
-	    exit(1);
-	  }
-	}
-      }
-      
-      //if it is time to store the histogram
-      if(_time>NextStoreHisto-EPS){
-	for(i=0;i<Nbin;i++){
-	  fprintf(outputhisto,"%lg\t%lg\t%lg\n",_time,(double) i/boxarea*Param.sigma2,histogram[i]/histocount*boxarea/Param.sigma2);
-	}
-	NextStoreHisto += StoreHistoInter;
-	memset(histogram, 0, sizeof(double)*Nbin);
-	histocount=0;
-	fprintf(outputhisto,"\n");
-	fflush(outputhisto);
-      }
-      
-      NextHisto += HistoInter;
-    }
+    if(_time>NextHisto-EPS)
+      UpdateHistogram(Param, width,Neighbours,Nbin,histogram,&histocount,&NextHisto,HistoInter,Box,outputparam,rhomax,_time);
+
+    //if it is time to store the histogram
+    if(_time>NextStoreHisto-EPS)
+      StoreHistogram(Nbin,outputhisto,_time,boxarea,histogram,&histocount, &NextStoreHisto, StoreHistoInter,Param);
     
 #ifdef PRESSURE
     //if it is time to record the pressure
-    if(_time>NextStorePressure-EPS){
-      // Save the bulk density in param
-      fprintf(outputpressure,"%lg\t%lg\t%lg\t%lg\n",_time,pressure[0]/StorePressureInter/Param.Ly,pressure[1]/StorePressureInter/Param.Ly,average_density/Param.Lx*5/Param.Ly/StorePressureInter);
-      
-      NextStorePressure += StorePressureInter;
-      average_density=0;
-      pressure[0]=0;
-      pressure[1]=0;
-      fflush(outputpressure);
-    }
+    if(_time>NextStorePressure-EPS)
+      StorePressure(outputpressure,  _time, pressure, Param,&average_density,StorePressureInter,&NextStorePressure);
+#endif
+
+#ifdef OBSERVABLE
+    if(_time>NextStoreEnergy-EPS)
+      StoreEnergy(outputenergy,  _time, &Energy, Param,StoreInterEnergy,&NextStoreEnergy);
 #endif
   }
   
   printf("Simulation time: %ld seconds\n",time(NULL)-time_clock);
   fprintf(outputparam,"#Simulation time: %ld seconds\n",time(NULL)-time_clock);
-
+  
   free(histogram);
   free(Particles);
   free(density);

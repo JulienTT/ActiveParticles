@@ -10,6 +10,11 @@
   F represents obstacles. In practicte, we may not compute the force
   exerted by the obstacles but instead cancel the normal component of
   the velocity.
+  
+  TO BE IMPLEMENTED.
+
+  Another move function which represents obstacles as potentials in
+  case we want overlapping or dense obstacles.
 
 */
 
@@ -19,6 +24,9 @@
 #include <math.h>
 #include "mt19937-64.c"
 #include <time.h>
+
+#include <fftw3.h>
+
 #define PERIODICBC
 
 // Structure particles which contains all the data needed to characterize the state of a particle

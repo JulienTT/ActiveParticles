@@ -169,7 +169,7 @@ double genrand64_real3(void)
 int MEMORY=0;
 double vMEM;
 
-double gasdevMT()
+double gasdev()
 {
   double fac,rsq,v1,v2;
   

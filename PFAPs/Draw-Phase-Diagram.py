@@ -29,14 +29,14 @@ params = {'backend': 'Agg',
           'figure.figsize': fig_size}
 rcParams.update(params)
 
-output = "PhaseDiagram.png"
+output = "PhaseDiagram.svg"
 data1=loadtxt("DiagPhase-Dr-2-LG.txt")
 data2=loadtxt("DiagPhase-Dr-2-MIPS.txt")
 
 #X is the first column, Y the second, etc.
 vLG=data1[:,0]
 rhoLG_G=data1[:,1]
-rhoLG_L=data1[:,3]
+rhoLG_L=data1[:,2]
 
 #for i in len(rhoLG_G):
 #    rhoLG[i]=rhoLG_G[i]
@@ -48,7 +48,7 @@ rhoLG_L=data1[:,3]
 
 vMIPS=data2[:,0]
 rhoMIPS_G=data2[:,1]
-rhoMIPS_L=data2[:,3]
+rhoMIPS_L=data2[:,2]
 
 font = {'fontname'   : 'Times',
         'color'      : 'k',
@@ -83,7 +83,7 @@ ax.set_ylim(0.05,25)
 
 #ax.set_yscale('log')
 #ax.set_title('time = {0}' .format(time))
-ax.text(1.3, -3.5, r'$\rho_0$')
+ax.text(1.3, -3, r'$\rho_0$')
 
 #ax.set_xlabel(r'$\rho_0$')
 ax.text(-.2, 23, r'$v_0$')

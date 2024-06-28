@@ -24,6 +24,9 @@ double LJ_Potential(double dist2,param Param){
 }
 
 void Force_LJ(particle* Particles,param Param, double* forces,long** Box,long* Neighbours,box*** NeighbouringBoxes
+#ifdef STRESSTENSOR
+	   ,int StressBool,double** sigma_IK,double** sigma_a,long* count_measure_stress_tensor
+#endif
 #ifdef OBSERVABLE
 	      , double* Energy
 #endif
@@ -71,6 +74,13 @@ void Force_LJ(particle* Particles,param Param, double* forces,long** Box,long* N
 	    //The force on j is minus the force on i
 	    forces[2*j]   -= Force[0];
 	    forces[2*j+1] -= Force[1];
+
+#ifdef STRESSTENSOR
+	    sigma_IK[bi][bj][0] +=dx*Force[0];
+	    sigma_IK[bi][bj][1] +=dx*Force[1];
+	    sigma_IK[bi][bj][2] +=dy*Force[0];
+	    sigma_IK[bi][bj][3] +=dy*Force[1];
+#endif
 	  }
 	  // Now that j has contributed, look at the next particle
 	  j=Neighbours[2*j+1];
@@ -105,6 +115,128 @@ void Force_LJ(particle* Particles,param Param, double* forces,long** Box,long* N
 	      forces[2*i+1] += Force[1];
 	      forces[2*j]   -= Force[0];
 	      forces[2*j+1] -= Force[1];
+#ifdef STRESSTENSOR
+	      //Box on top
+	      if(k==1){
+		//Coordinate of the intersection bet r_{ij} and the top of the box
+
+		// r_{ij=(dx,dy)
+		//  \tilde r_{ij}=(dx^*,dy^*)
+		//   Colinearity tells us that
+		//   dx/dy=dx^*/dy^* so that
+		//  dx^*=dy^* dx/dy
+		double yint=(bj+1)*Param.rbox;
+		double dy1 = yint-Particles[i].y;
+		double dx1 = dy1*dx/dy;
+		double yint_partj=(nbj)*Param.rbox;
+		double dy2 = Particles[j].y-yint_partj;
+		double dx2 = dy2*dx/dy;
+		
+		sigma_IK[bi][bj][0] +=dx1*Force[0];
+		sigma_IK[bi][bj][1] +=dx1*Force[1];
+		sigma_IK[bi][bj][2] +=dy1*Force[0];
+		sigma_IK[bi][bj][3] +=dy1*Force[1];
+		sigma_IK[nbi][nbj][0] +=dx2*Force[0];
+		sigma_IK[nbi][nbj][1] +=dx2*Force[1];
+		sigma_IK[nbi][nbj][2] +=dy2*Force[0];
+		sigma_IK[nbi][nbj][3] +=dy2*Force[1];
+	      }
+	      //Box on top right
+	      if(k==2){
+		// xint and yint are the right and top positions of particle-i's box
+		double xint=(bi+1)*Param.rbox;
+		double yint=(bj+1)*Param.rbox;
+		// xint and yint are the bottom and left positions of particle-j's box
+		double xint_partj=(nbi)*Param.rbox;
+		double yint_partj=(nbj)*Param.rbox;
+		
+		double dx1 = xint-Particles[i].x;
+		double dy1 = yint-Particles[i].y;		
+		double dx2 = xint_partj-Particles[j].x;
+		double dy2 = yint_partj-Particles[j].y;
+		// abscissa of intersection of r_{ij} with tox of box i
+		double dxa=dy1*dx/dy;		
+		if(dxa>dx1){
+		  dyp1=dx1*dy/dx;
+		  dxa2=dxa-dx1;
+		  dya2=dy1-dyp1;
+		  dx2p=dx2-dxa2;
+		  
+		  sigma_IK[bi][bj][0] +=dx1*Force[0];
+		  sigma_IK[bi][bj][1] +=dx1*Force[1];
+		  sigma_IK[bi][bj][2] +=dyp1*Force[0];
+		  sigma_IK[bi][bj][3] +=dyp1*Force[1];
+		  
+		  sigma_IK[nbi][nbj][0] +=dx2p*Force[0];
+		  sigma_IK[nbi][nbj][1] +=dx2p*Force[1];
+		  sigma_IK[nbi][nbj][2] +=dy2*Force[0];
+		  sigma_IK[nbi][nbj][3] +=dy2*Force[1];
+
+		  nnbi=NeighbouringBoxes[bi][bj][3].i;
+		  nnbj=NeighbouringBoxes[bi][bj][3].j;
+		  
+		  sigma_IK[nnbi][nnbj][0] +=dxa2*Force[0];
+		  sigma_IK[nnbi][nnbj][1] +=dxa2*Force[1];
+		  sigma_IK[nnbi][nnbj][2] +=dya2*Force[0];
+		  sigma_IK[nnbi][nnbj][3] +=dya2*Force[1];
+		}
+		else{
+		  dxp1=dxa;
+		  dy2p=dx2*dy/dx;
+		  dya2=dy2-dy2p;
+		  dxa2=dx1-dxa;
+		  
+		  sigma_IK[bi][bj][0] +=dxp1*Force[0];
+		  sigma_IK[bi][bj][1] +=dxp1*Force[1];
+		  sigma_IK[bi][bj][2] +=dy1*Force[0];
+		  sigma_IK[bi][bj][3] +=dy1*Force[1];
+		  
+		  sigma_IK[nbi][nbj][0] +=dx2*Force[0];
+		  sigma_IK[nbi][nbj][1] +=dx2*Force[1];
+		  sigma_IK[nbi][nbj][2] +=dy2p*Force[0];
+		  sigma_IK[nbi][nbj][3] +=dy2p*Force[1];
+
+		  nnbi=NeighbouringBoxes[bi][bj][1].i;
+		  nnbj=NeighbouringBoxes[bi][bj][1].j;
+		  
+		  sigma_IK[nnbi][nnbj][0] +=dxa2*Force[0];
+		  sigma_IK[nnbi][nnbj][1] +=dxa2*Force[1];
+		  sigma_IK[nnbi][nnbj][2] +=dya2*Force[0];
+		  sigma_IK[nnbi][nnbj][3] +=dya2*Force[1];
+
+		}
+	      }
+	      //Box on right
+	      if(k==3){
+		// r_{ij=(dx,dy)
+		//  \tilde r_{ij}=(dx^*,dy^*)
+		//   Colinearity tells us that
+		//   dx/dy=dx^*/dy^* so that
+		//  dy^*=dx^* dy/dx
+		// xint is the right of the box of particle i
+		double xint=(bi+1)*Param.rbox;
+		double dx1 = xint-Particles[i].x;
+		double dy1 = dx1*dy/dx;
+		//xint_partj is the left of the box of particle j
+		double xint_partj=(nbi)*Param.rbox;
+		double dx2 = Particles[j].x-xint_partj;
+		double dy2 = dx2*dy/dx;
+		
+		sigma_IK[bi][bj][0] +=dx1*Force[0];
+		sigma_IK[bi][bj][1] +=dx1*Force[1];
+		sigma_IK[bi][bj][2] +=dy1*Force[0];
+		sigma_IK[bi][bj][3] +=dy1*Force[1];
+		sigma_IK[nbi][nbj][0] +=dx2*Force[0];
+		sigma_IK[nbi][nbj][1] +=dx2*Force[1];
+		sigma_IK[nbi][nbj][2] +=dy2*Force[0];
+		sigma_IK[nbi][nbj][3] +=dy2*Force[1];
+	      }
+	      //Box on bottom right: update
+	      if(k==4){
+		
+	      }
+#endif
+	      
 	    }
 	    j=Neighbours[2*j+1];
 	  }

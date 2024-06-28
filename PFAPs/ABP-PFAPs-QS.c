@@ -90,7 +90,7 @@ typedef struct param {
 #endif
 } param;
 
-#include "ABP-LJ-functions.c"
+#include "ABP-PFAPS-QS-functions.c"
 
 int main(int argc, char* argv[]){
   
@@ -172,7 +172,7 @@ int main(int argc, char* argv[]){
 #endif
 
 #ifdef STRESSTENSOR
-  double ** sigma_IK; // array in which the Irving-Kirkwood stress tensor is stored
+  double *** sigma_IK; // array in which the Irving-Kirkwood stress tensor is stored
   double ** sigma_a;  // array in which the active stress tensor is stored
   
   FILE*   output_stress_tensor;       // File in which histogram of the stress tensor is stored
@@ -283,15 +283,18 @@ int main(int argc, char* argv[]){
 #endif
 
 #ifdef STRESSTENSOR
-  sigma_IK = (double**) malloc(Param.NxBox*sizeof(double*));
+  sigma_IK = (double***) malloc(Param.NxBox*sizeof(double*));
   sigma_a  = (double**) malloc(Param.NxBox*sizeof(double*));
   for (i=0;i<Param.NxBox;i++){
-    sigma_IK[i] = (double*) calloc(Param.NyBox,sizeof(double));
+    sigma_IK[i] = (double**) calloc(Param.NyBox,sizeof(double));
     sigma_a[i]  = (double*) calloc(Param.NyBox,sizeof(double));
+    for (j=0;j<Param.NyBox;j++)
+      sigma_IK{i][j] = (double*) calloc(4,sizeof(double));
   }
   
   Next_Measure_Stress_Tensor = Inter_Measure_Stress_Tensor;
   Next_Store_Stress_Tensor   = Inter_Store_Stress_Tensor;
+  count_measure_stress_tensor= 0;
 #endif
 
 #ifdef OBSERVABLE
@@ -385,7 +388,7 @@ int main(int argc, char* argv[]){
 		       ,pressure,&average_density
 #endif
 #ifdef STRESSTENSOR
-		       ,sigma_IK,sigma_a,&next_measure_stress_tensor,&next_store_stress_tensor_
+		       ,sigma_IK,sigma_a,&next_measure_stress_tensor,&next_store_stress_tensor,inter_store_stress_tensor, &count_measure_stress_tensor
 #endif
 #ifdef OBSERVABLE
 		       ,&Energy
@@ -448,6 +451,8 @@ int main(int argc, char* argv[]){
 
 #ifdef STRESSTENSOR
   for (i=0;i<Param.NxBox;i++){
+    for (j=0;j<Param.NxBox;j++)
+      free(sigma_IK[i][j]);
     free(sigma_IK[i]);
     free(sigma_a[i]);
   }

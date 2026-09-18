@@ -16,9 +16,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+
 #ifdef _MT
 #include "mt19937-64.c"
 #endif
+
 #ifdef _PCG
 #include "pcg_variants.h"
 #include "pcg_julien.h"
@@ -65,11 +67,6 @@ typedef struct param {
   double sigma6; //sigma^6
   double rmax2;  // interaction cut-off (squared)
   double amp; //used to compute the force
-#endif
-#if defined(HARMONIC)
-  double sigma; //sigma
-  double k;  // stiffness
-  double ksigma; //used to compute the force
 #endif
   
   double mu; //particle mobility

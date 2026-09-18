@@ -169,6 +169,7 @@ double genrand64_real3(void)
 int MEMORY=0;
 double vMEM;
 
+// gasdev() return a Gaussian variable of mean 0 and variance 1;
 double gasdev()
 {
   double fac,rsq,v1,v2;

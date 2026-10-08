@@ -7,6 +7,24 @@ void ERROR(char* msg){
 #include "WCA.c"
 #endif
 
+void AddAParticle(param* Param, particle* Particles, long i, long j,long** Box,long* Neighbours){
+  if(Param[0].N<Param[0].Nmax-1){
+    Param[0].N += 1;
+    Particles[Param[0].N-1].x=(i+.5)*Param.rbox;
+    Particles[Param[0].N-1].y=(j+.5)*Param.rbox;
+    Particles[Param[0].N-1].theta=2*M_PI*genrand64_real3();
+    Particles[Param[0].N-1].bi=i;
+    Particles[Param[0].N-1].bj=j;
+    AddinBox(Param[0].N-1,i,j,Box,Neighbours);
+  }
+}
+
+void DelAParticle(param* Param, particle* Particles, long i, long j,long** Box,long* Neighbours){
+
+
+}
+
+
 /*
   To add someone in a box, you need to put it there and to set its new
   neighbours. This functions add at the top.
